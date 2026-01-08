@@ -3,33 +3,34 @@
 #include "buddy.h"
 #include "internal.h"
 
+static const size_t BUDDYHEADER_META_DATA_SIZE = (sizeof(BuddyHeader) + 31) & ~31;
+static const size_t BUDDYPOOL_META_DATA_SIZE = (sizeof(BuddyPool) + 63) & ~63;
+
 BuddyHeader* get_buddy(const BuddyPool* pool, const BuddyHeader* ptr){
-    return pool->base + ((ptr - pool) ^ (uint8_t)pow(2, ptr->order));
+    return (uint8_t*)pool->base + (((uint8_t*)ptr - (uint8_t*)pool->base) ^ (1ULL << ptr->order));
 }
 
 uint8_t find_order(const size_t size){
-    size_t n = size;
+    size_t n = 1;
     uint8_t order = 0;
 
-    while(n > 1){
-        n /= 2;
+    while(n < size){
+        n *= 2;
         order++;
     }
 
-    return ++order;
+    return (order < MIN_ORDER) ? MIN_ORDER : order;
 }
 
 void* buddy_init(const size_t size){
     uint8_t order = find_order(size);
 
-    if(size != pow(2, order)){
+    if(size != (1ULL << order)){
         printf("size is not a power of two\n");
         return NULL;
     } 
 
-    size_t meta_data_size = (sizeof(BuddyPool) + 63) & ~63;
-
-    void* addr = mmap(NULL, size + meta_data_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void* addr = mmap(NULL, size + BUDDYPOOL_META_DATA_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
     if(addr == MAP_FAILED){
         printf("mmap failed\n");
@@ -37,7 +38,7 @@ void* buddy_init(const size_t size){
     }
 
     BuddyPool* pool = (BuddyPool*) addr;
-    pool->base = (uint8_t*) addr + meta_data_size;
+    pool->base = (uint8_t*) addr + BUDDYPOOL_META_DATA_SIZE;
 
     for(int i = 0; i < MAX_ORDER + 1; i++){
         pool->free_list[i] = NULL;
@@ -54,33 +55,94 @@ void* buddy_init(const size_t size){
 }
 
 void* buddy_alloc(void* pool, const size_t size){
-    size_t meta_data_size = (sizeof(BuddyHeader) + 31) & ~31;
-    uint8_t order = find_order(size + meta_data_size);
+    uint8_t order = find_order(size + BUDDYHEADER_META_DATA_SIZE);
     BuddyPool* pool_ptr = pool;
-    int split = -1;
     void* ret = NULL;
 
     if(pool_ptr->free_list[order]){
-        ret = (uint8_t*)(pool_ptr->free_list[order]) + meta_data_size;
+        ret = (uint8_t*)(pool_ptr->free_list[order]) + BUDDYHEADER_META_DATA_SIZE;
+        pool_ptr->free_list[order]->is_free = false;
+
         pool_ptr->free_list[order] = pool_ptr->free_list[order]->next;
+
+        if(pool_ptr->free_list[order])
+            pool_ptr->free_list[order]->prev = NULL;
+        
         return ret;
     }
     
-    for(int i = order; i < MAX_ORDER + 1; i++){
-        if(pool_ptr->free_list[i])
-            split = i;
+    for(int i = order + 1; i < MAX_ORDER + 1; i++){
+        if(pool_ptr->free_list[i]){
+            BuddyHeader* split = pool_ptr->free_list[i];
+
+            split->is_free = false;
+            split->next = NULL;
+            split->prev = NULL;
+
+            pool_ptr->free_list[i] = pool_ptr->free_list[i]->next;
+
+            if(pool_ptr->free_list[i])
+                pool_ptr->free_list[i]->prev = NULL;
+
+            while(split->order != order){
+                BuddyHeader* header1 = (uint8_t*)split + (1ULL << (split->order - 1));
+                header1->is_free = true;
+                header1->order = split->order - 1;
+                header1->next = pool_ptr->free_list[header1->order];
+                header1->prev = NULL;
+                
+                if(pool_ptr->free_list[header1->order])
+                    pool_ptr->free_list[header1->order]->prev = header1;
+                pool_ptr->free_list[header1->order] = header1;
+
+                split->order--;
+            }
+
+            ret = (uint8_t*)split + BUDDYHEADER_META_DATA_SIZE;
+            return ret;
+        }
     }
 
-    if(split == -1){
-        printf("No avaliable memory");
-        return ret;
-    }
-
-    for(int i = split; i > order; i--)
+    printf("No avaliable memory");
+    return ret;
 }
 
 void buddy_free(void* pool, const void *ptr){
+    BuddyPool* pool_ptr = pool;
+    BuddyHeader* header = (uint8_t*)ptr - BUDDYHEADER_META_DATA_SIZE;
+    uint8_t order = header->order;
 
+    while(order < MAX_ORDER){
+        header->is_free = true;
+        BuddyHeader* buddy1_header = get_buddy(pool, header);
+    
+        if(buddy1_header->order == order && buddy1_header->is_free){
+            if(pool_ptr->free_list[order] == buddy1_header)
+                pool_ptr->free_list[order] = buddy1_header->next;
+            if(buddy1_header->next)
+                buddy1_header->next->prev = buddy1_header->prev;
+            if(buddy1_header->prev)
+                buddy1_header->prev->next = buddy1_header->next;
+    
+            BuddyHeader* merged = (header < buddy1_header)? header : buddy1_header;
+    
+            merged->order = order + 1;
+            merged->is_free = true;
+            merged->prev = NULL;
+
+            header = merged;
+            order = header->order;
+        }
+        else break;
+    }
+
+    header->next = pool_ptr->free_list[order];
+    header->prev = NULL;
+
+    if(pool_ptr->free_list[order]) 
+        pool_ptr->free_list[order]->prev = header;
+        
+    pool_ptr->free_list[order] = header;
 }
 void buddy_cleanup(void* pool){
 
