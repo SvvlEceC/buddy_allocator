@@ -135,8 +135,14 @@ void buddy_free(void* pool, const void *ptr){
         }
         else break;
     }
-    pool_ptr->free_list[order] = header;
+
     header->next = pool_ptr->free_list[order];
+    header->prev = NULL;
+
+    if(pool_ptr->free_list[order]) 
+        pool_ptr->free_list[order]->prev = header;
+        
+    pool_ptr->free_list[order] = header;
 }
 void buddy_cleanup(void* pool){
 
