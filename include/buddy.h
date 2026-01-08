@@ -26,10 +26,10 @@ void* buddy_alloc(void* pool, const size_t size);
 void buddy_free(void* pool, const void *ptr);
 
 /**
- * @brief Cleans the memory pool.
- * @param pool The handle of the pool to be cleaned.
+ * @brief Destroys the memory pool.
+ * @param pool The handle of the pool to be destroyed.
  */
-void buddy_cleanup(void* pool);
+void buddy_destroy(void* pool);
 
 /**
  * @brief Visualizes the structure of the memory pool.
