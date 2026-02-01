@@ -1,6 +1,6 @@
 #include <sys/mman.h>
 #include <stdio.h>
-#include "../include/buddy.h"
+#include "buddy.h"
 #include "internal.h"
 
 static const size_t BUDDYHEADER_META_DATA_SIZE = (sizeof(BuddyHeader) + 31) & ~31;
@@ -109,6 +109,11 @@ void* buddy_alloc(void* pool, const size_t size){
 }
 
 void buddy_free(void* pool, const void *ptr){
+    if(!ptr){
+        printf("Cannot free NULL ptr\n");
+        return;
+    }
+
     BuddyPool* pool_ptr = (BuddyPool*)pool;
     BuddyHeader* header = (BuddyHeader*)((uint8_t*)ptr - BUDDYHEADER_META_DATA_SIZE);
     uint8_t order = header->order;
