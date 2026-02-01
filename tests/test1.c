@@ -1,4 +1,4 @@
-#include "../include/buddy.h"
+#include "buddy.h"
 
 int main(int argc, char const *argv[])
 {
